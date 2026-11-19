@@ -117,6 +117,39 @@ On AWS, Amazon Inspector enhanced scanning for ECR covers these automatically.
 - A **name match is not a vulnerability verdict**. Distros backport security fixes without changing the upstream version number, so compare the package version in the CSV against your vendor's advisory (RHEL, Amazon Linux, Debian, Ubuntu, Alpine).
 - The script finds what's in the cluster *right now*. To stop vulnerable images getting deployed in the first place, scan images in CI as well.
 
+## Amazon ECS: `ecs_images.sh`
+
+ECS has no `kubectl exec`, and Fargate has no host to log into, so for ECS the starting point is an inventory of what is actually running. `ecs_images.sh` lists every running task in every cluster (current region and profile) with its containers and images.
+
+```bash
+bash ecs_images.sh                          # run with bash, also from zsh
+AWS_REGION=<your-region> bash ecs_images.sh
+```
+
+Requires the AWS CLI and `jq`, plus `ecs:ListClusters`, `ecs:ListTasks` and `ecs:DescribeTasks` permissions.
+
+It prints:
+
+1. **Running tasks**: cluster, service, task ID, task definition (family:revision), start time, container, image and image digest
+2. **Unique images**: each tag and digest pair, with how many containers run it
+3. **Same tag, different digests**: tags that were re-pushed, so tasks under one tag are running different builds
+
+and saves everything to `ecs_tasks_<timestamp>.csv`.
+
+Why the digest matters: a tag can be re-pushed, and a long-running task keeps the image it pulled at start. To check what a task is actually running, scan the digest, not the tag:
+
+```bash
+trivy image <image>@sha256:<digest>
+trivy image -q --list-all-pkgs --format json <image>@sha256:<digest> \
+  | jq -r '.Results[].Packages[]? | "\(.Name) \(.Version)"' | grep -i <term>
+```
+
+To fix a finding, rebuild the image, update the task definition if the tag changed, then redeploy the **service** shown in the output:
+
+```bash
+aws ecs update-service --cluster <cluster> --service <service> --force-new-deployment
+```
+
 ## License
 
 MIT
